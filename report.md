@@ -67,7 +67,7 @@ The gap is consistent: relevant results score 0.68+, irrelevant noise tops out a
 
 ## Cross-Disciplinary Suggestions
 
-After the main retrieval, the system finds "You Might Also Like" courses:
+After the main retrieval, the system finds "Students exploring this also found" courses:
 1. Takes the top result's embedding text
 2. Queries Qdrant for similar courses, excluding departments already in the main results
 3. Returns top 3 cross-disciplinary matches
@@ -90,7 +90,7 @@ This creates emergent personality-based recommendations — courses with similar
 1. **GPU acceleration**: Run Ollama with GPU passthrough to reduce LLM generation from ~120s to ~2-5s
 2. **Streaming**: Stream LLM responses to the frontend for better perceived latency
 3. **Query expansion**: Map common abbreviations ("ML" → "Machine Learning", "AI" → "Artificial Intelligence") before embedding. This addresses the remaining gap where even E5 struggles with very short ambiguous tokens.
-4. **Caching**: Add Redis cache for frequent queries to avoid redundant LLM calls
+4. **Caching**: Add memcached for frequent queries to avoid redundant LLM calls (preferred over Redis due to the variability of user request caching)
 5. **LLM-powered extraction**: Replace brittle CSS selectors with [Google's LangExtract](https://github.com/google/langextract) for the scraping layer. LangExtract uses LLMs to extract structured data from unstructured text with source grounding — each extracted field maps back to its exact location in the source HTML. This would make the scrapers resilient to markup changes on CAB and the Bulletin, and the grounding traces provide auditability for data quality.
 6. **Incremental updates**: Delta ingestion instead of full recreate; track last-scraped timestamps
 7. **Fine-tuned embeddings**: Fine-tune E5 on academic course description pairs for domain-specific similarity

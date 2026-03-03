@@ -19,10 +19,10 @@ Scrapers (CAB + Bulletin) -> Merged JSON -> Qdrant Vector DB
 - **Scrapers**: Playwright (CAB) + requests/BeautifulSoup (Bulletin) with normalized course codes
 - **Vector DB**: Qdrant with `intfloat/e5-base-v2` embeddings (768 dim, asymmetric query/passage prefixes)
 - **Search**: Hybrid search (semantic retrieval + keyword reranking via rapidfuzz on the candidate set)
-- **Suggestions**: Cross-disciplinary "You Might Also Like" recommendations using embedding similarity across departments
+- **Suggestions**: Cross-disciplinary "Students exploring this also found" recommendations using embedding similarity across departments
 - **LLM**: Ollama (Mistral) for answer generation
 - **API**: Async FastAPI with `/query`, `/evaluate`, `/health` endpoints
-- **Frontend**: Streamlit with expandable course cards and suggestion section
+- **Frontend**: Streamlit ("Brown University Forager") with expandable course cards, client-side department filtering, and suggestion section
 
 ## Quick Start (Docker)
 
@@ -122,7 +122,7 @@ All settings are configurable via environment variables (see `src/config.py`):
 
 - **intfloat/e5-base-v2**: Retrieval-tuned embedding model that uses `query:` and `passage:` prefixes for asymmetric search. 768 dimensions provide strong semantic resolution. Handles abbreviations (ML, AI, NLP) natively, unlike general-purpose models.
 - **Hybrid search**: Semantic retrieval fetches 3x candidates, then keyword reranking with rapidfuzz scores the candidate set. This is O(3k) not O(n) — fast hybrid without scanning the full collection.
-- **Cross-disciplinary suggestions**: After main retrieval, the top result's embedding finds similar courses from other departments. This gives a "students who like X also take Y" effect emergent from the embedding space.
+- **Cross-disciplinary suggestions**: After main retrieval, the top result's embedding text is re-embedded and used to find similar courses from other departments. This gives a "students who like X also take Y" effect emergent from the embedding space.
 - **Qdrant**: Purpose-built vector DB with payload filtering and full-text indexing, eliminating need for a separate metadata store.
 - **Deterministic IDs**: UUID5 from course_code ensures stable point IDs across ingestion runs, preventing duplicates if the pipeline is extended to support incremental upserts.
 - **Async API**: All FastAPI endpoints are `async def` with blocking work offloaded via `asyncio.to_thread()`. This keeps the event loop free so `/health` and concurrent `/query` requests don't block each other during long LLM generation calls.
