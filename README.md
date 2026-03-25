@@ -1,28 +1,45 @@
-# BrownBot - AI-Powered Brown University Course Search
+# BrownBot - Brown University Course Advisor
 
-A RAG (Retrieval-Augmented Generation) pipeline that scrapes Brown University course data from CAB and the Bulletin, indexes it in a vector database, and provides natural language search with cross-disciplinary course suggestions via a Streamlit UI.
+A RAG (Retrieval-Augmented Generation) pipeline that scrapes Brown University course data from CAB and the Bulletin, indexes it in a vector database, and provides natural language search with cross-disciplinary (inter-department) course suggestions via a Streamlit UI.
 
 ## Architecture
 
 ```
-Scrapers (CAB + Bulletin) -> Merged JSON -> Qdrant Vector DB
-                                                  |
-                                          E5-base-v2 embeddings
-                                          (query:/passage:)
-                                                  |
-                                    FastAPI (async) -> Ollama LLM (Mistral)
-                                                  |
-                                             Streamlit UI
+Scrapers (CAB + Bulletin) ──→ Merged JSON ──→ Qdrant Vector DB
+                                              E5-base-v2 embeddings
+                                              (query:/passage:)
+                                                     │
+FastAPI (async) ─────────────────────────── Hybrid Search
+     │                                              │
+     ├─────────────────────────────────── Ollama (Mistral)
+     │
+Streamlit UI
 ```
 
 **Components:**
 - **Scrapers**: Playwright (CAB) + requests/BeautifulSoup (Bulletin) with normalized course codes
 - **Vector DB**: Qdrant with `intfloat/e5-base-v2` embeddings (768 dim, asymmetric query/passage prefixes)
 - **Search**: Hybrid search (semantic retrieval + keyword reranking via rapidfuzz on the candidate set)
-- **Suggestions**: Cross-disciplinary "Students exploring this also found" recommendations using embedding similarity across departments
+- **Suggestions**: "Students exploring this also found" recommendations using embedding similarity across departments
 - **LLM**: Ollama (Mistral) for answer generation
 - **API**: Async FastAPI with `/query`, `/evaluate`, `/health` endpoints
 - **Frontend**: Streamlit ("Brown University Forager") with expandable course cards, client-side department filtering, and suggestion section
+
+## Example Queries
+
+- "Who teaches APMA2680, and when does the class meet?"
+- "I am interested in Philosophy courses related to metaphysics. Which ones do you recommend?"
+- "Find a Brown Bulletin course similar to CSCI0320 from CAB."
+- "List all CAB courses taught on Fridays after 3 pm related to machine learning."
+- "What ML courses are available?"
+
+![Screenshot](readme_assets/query_banjo.png)
+
+### Full Demo
+
+> Running on an i5-7400, GTX 1060 3GB, and 8GB DDR3 — the LLM generation is slow on this machine, but it works.
+
+<video src="readme_assets/query_cc.mp4" controls width="800"></video>
 
 ## Quick Start (Docker)
 
@@ -45,52 +62,15 @@ Then visit:
 - **API docs**: http://localhost:8000/docs
 - **Qdrant dashboard**: http://localhost:6333/dashboard
 
-## Local Development
+## Design Decisions
 
-**Install dependencies:**
-```bash
-pip install -r requirements.txt
-playwright install chromium
-```
-
-**Start Qdrant:**
-```bash
-docker run -p 6333:6333 qdrant/qdrant
-```
-
-**Start Ollama:**
-```bash
-ollama serve
-ollama pull mistral
-```
-
-**Run scraper:**
-```bash
-python scripts/run_scrape.py
-```
-
-**Ingest into Qdrant:**
-```bash
-python scripts/run_ingest.py
-```
-
-**Start API:**
-```bash
-uvicorn src.api.main:app --reload
-```
-
-**Start frontend (separate terminal):**
-```bash
-streamlit run frontend/app.py
-```
-
-## Example Queries
-
-- "Who teaches APMA2680, and when does the class meet?"
-- "I am interested in Philosophy courses related to metaphysics. Which ones do you recommend?"
-- "Find a Brown Bulletin course similar to CSCI0320 from CAB."
-- "List all CAB courses taught on Fridays after 3 pm related to machine learning."
-- "What ML courses are available?"
+- **intfloat/e5-base-v2**: Retrieval-tuned embedding model that uses `query:` and `passage:` prefixes for asymmetric search. 768 dimensions provide strong semantic resolution. Handles abbreviations (ML, AI, NLP) natively, unlike general-purpose models.
+- **Hybrid search**: Semantic retrieval fetches 3x candidates, then keyword reranking with rapidfuzz scores the candidate set. This is O(3k) not O(n) — fast hybrid without scanning the full collection.
+- **Cross-disciplinary suggestions**: After main retrieval, the top result's embedding text is re-embedded and used to find similar courses from other departments. This gives a "students who like X also take Y" effect emergent from the embedding space.
+- **Qdrant**: Purpose-built vector DB with payload filtering and full-text indexing, eliminating need for a separate metadata store.
+- **Deterministic IDs**: UUID5 from course_code ensures stable point IDs across ingestion runs, preventing duplicates if the pipeline is extended to support incremental upserts.
+- **Async API**: All FastAPI endpoints are `async def` with blocking work offloaded via `asyncio.to_thread()`. This keeps the event loop free so `/health` and concurrent `/query` requests don't block each other during long LLM generation calls.
+- **Union merge**: Both CAB and Bulletin courses are included. CAB provides schedule data (instructor, meeting times), Bulletin provides catalog data (descriptions, prerequisites). Courses in both get field-level merge with source="Both".
 
 ## Configuration
 
@@ -117,16 +97,6 @@ All settings are configurable via environment variables (see `src/config.py`):
 | `QDRANT_COLLECTION` | brown_courses | Qdrant collection name |
 | `DATA_FILE` | data/courses.json | Path to merged course data |
 | `API_URL` | http://localhost:8000 | API URL used by the Streamlit frontend |
-
-## Design Decisions
-
-- **intfloat/e5-base-v2**: Retrieval-tuned embedding model that uses `query:` and `passage:` prefixes for asymmetric search. 768 dimensions provide strong semantic resolution. Handles abbreviations (ML, AI, NLP) natively, unlike general-purpose models.
-- **Hybrid search**: Semantic retrieval fetches 3x candidates, then keyword reranking with rapidfuzz scores the candidate set. This is O(3k) not O(n) — fast hybrid without scanning the full collection.
-- **Cross-disciplinary suggestions**: After main retrieval, the top result's embedding text is re-embedded and used to find similar courses from other departments. This gives a "students who like X also take Y" effect emergent from the embedding space.
-- **Qdrant**: Purpose-built vector DB with payload filtering and full-text indexing, eliminating need for a separate metadata store.
-- **Deterministic IDs**: UUID5 from course_code ensures stable point IDs across ingestion runs, preventing duplicates if the pipeline is extended to support incremental upserts.
-- **Async API**: All FastAPI endpoints are `async def` with blocking work offloaded via `asyncio.to_thread()`. This keeps the event loop free so `/health` and concurrent `/query` requests don't block each other during long LLM generation calls.
-- **Union merge**: Both CAB and Bulletin courses are included. CAB provides schedule data (instructor, meeting times), Bulletin provides catalog data (descriptions, prerequisites). Courses in both get field-level merge with source="Both".
 
 ## Adding New Data Sources
 
