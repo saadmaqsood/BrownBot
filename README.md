@@ -1,6 +1,12 @@
 # BrownBot - Brown University Course Advisor
 
-A RAG (Retrieval-Augmented Generation) pipeline that scrapes Brown University course data from CAB and the Bulletin, indexes it in a vector database, and provides natural language search with cross-disciplinary (inter-department) course suggestions via a Streamlit UI.
+A RAG (Retrieval-Augmented Generation) pipeline that scrapes Brown University course data from CAB and the Bulletin, indexes it in a vector database, and answers natural language questions about courses with cross-disciplinary suggestions that surface connections students wouldn't find browsing by department.
+
+## Why
+
+Course search at Brown is split across two systems. CAB has schedules and instructors. The Bulletin has descriptions and prerequisites. Neither talks to the other, and neither understands what you mean when you type "ML courses on Fridays."
+
+BrownBot merges both sources into a single vector space, layers hybrid search on top, and uses an LLM to generate answers grounded in real course data. The cross-disciplinary suggestion system finds courses from other departments that live near your query in embedding space — a CS student asking about machine learning might discover relevant courses in Applied Math or Public Health that they'd never encounter through traditional browsing.
 
 ## Architecture
 
@@ -17,13 +23,10 @@ Streamlit UI
 ```
 
 **Components:**
-- **Scrapers**: Playwright (CAB) + requests/BeautifulSoup (Bulletin) with normalized course codes
-- **Vector DB**: Qdrant with `intfloat/e5-base-v2` embeddings (768 dim, asymmetric query/passage prefixes)
-- **Search**: Hybrid search (semantic retrieval + keyword reranking via rapidfuzz on the candidate set)
-- **Suggestions**: "Students exploring this also found" recommendations using embedding similarity across departments
-- **LLM**: Ollama (Mistral) for answer generation
-- **API**: Async FastAPI with `/query`, `/evaluate`, `/health` endpoints
-- **Frontend**: Streamlit ("Brown University Forager") with expandable course cards, client-side department filtering, and suggestion section
+- **Scrapers**: Playwright for CAB, requests/BeautifulSoup for Bulletin, with normalized course codes
+- **Search**: Hybrid — semantic retrieval fetches 3x candidates, then rapidfuzz keyword reranking on the candidate set
+- **Suggestions**: Cross-departmental "students exploring this also found" recommendations via embedding similarity
+- **Frontend**: Streamlit with expandable course cards, department filtering, and suggestion section
 
 ## Example Queries
 
@@ -64,13 +67,21 @@ Then visit:
 
 ## Design Decisions
 
-- **intfloat/e5-base-v2**: Retrieval-tuned embedding model that uses `query:` and `passage:` prefixes for asymmetric search. 768 dimensions provide strong semantic resolution. Handles abbreviations (ML, AI, NLP) natively, unlike general-purpose models.
-- **Hybrid search**: Semantic retrieval fetches 3x candidates, then keyword reranking with rapidfuzz scores the candidate set. This is O(3k) not O(n) — fast hybrid without scanning the full collection.
-- **Cross-disciplinary suggestions**: After main retrieval, the top result's embedding text is re-embedded and used to find similar courses from other departments. This gives a "students who like X also take Y" effect emergent from the embedding space.
-- **Qdrant**: Purpose-built vector DB with payload filtering and full-text indexing, eliminating need for a separate metadata store.
-- **Deterministic IDs**: UUID5 from course_code ensures stable point IDs across ingestion runs, preventing duplicates if the pipeline is extended to support incremental upserts.
-- **Async API**: All FastAPI endpoints are `async def` with blocking work offloaded via `asyncio.to_thread()`. This keeps the event loop free so `/health` and concurrent `/query` requests don't block each other during long LLM generation calls.
-- **Union merge**: Both CAB and Bulletin courses are included. CAB provides schedule data (instructor, meeting times), Bulletin provides catalog data (descriptions, prerequisites). Courses in both get field-level merge with source="Both".
+- **E5-base-v2 over MiniLM**: MiniLM is symmetric — it embeds queries and documents the same way. This breaks down when a short query ("What ML courses?") needs to match a long course description. E5 uses explicit `query:` and `passage:` prefixes for asymmetric retrieval. In testing, MiniLM mapped "ML" closer to "Mathematics" (cosine 0.51) than "Machine Learning" (0.31) — the top-5 results were all wrong. E5 resolves common abbreviations natively, and the 768-dim space captures finer distinctions than MiniLM's 384.
+- **Qdrant over FAISS**: FAISS is fast but stores only vectors and integer IDs. Filtering by department would mean post-filtering (breaks top-k counts) or maintaining separate indexes per filter (combinatorial explosion). Qdrant applies filters during ANN search, carries full course payloads alongside vectors, provides built-in full-text indexing for hybrid search, and runs as a single Docker container with persistent storage and a dashboard. At ~2000 courses, FAISS's raw speed advantage is negligible.
+- **Hybrid search**: Semantic search understands meaning but not exact words. Keyword search understands exact words but not meaning. The hybrid approach retrieves 3x candidates via semantic search, then reranks with rapidfuzz keyword scoring. O(3k) not O(n) — keyword scoring runs only on the candidate set, not the full collection.
+- **Score threshold at 0.65**: Empirical testing showed relevant results consistently score 0.68+, while irrelevant noise tops out at ~0.67. The 0.65 threshold provides margin while filtering clearly bad matches.
+- **Smart suggestion suppression**: Not every query benefits from cross-disciplinary recommendations. A factual lookup ("Who teaches APMA 2680?") has one clear answer — suggestions would be noise. The system detects this from the score distribution: if the gap between #1 and #2 results exceeds 0.25, suggestions are suppressed. Below that threshold, scores are clustered (exploratory query) and suggestions are shown.
+- **Async API**: All endpoints are `async def` with blocking work offloaded via `asyncio.to_thread()`. The event loop stays free so `/health` and concurrent `/query` requests don't block each other during long LLM generation.
+- **Union merge**: CAB provides schedules, Bulletin provides descriptions. Both are retained. Courses appearing in both get field-level merge with `source="Both"`.
+- **Deterministic IDs**: UUID5 from course_code ensures stable point IDs across ingestion runs, preventing duplicates.
+
+## Performance
+
+- **Ingestion**: ~2000 courses embed and index in under 60 seconds on CPU
+- **Search**: Semantic retrieval <100ms. Hybrid reranking adds negligible overhead (fuzzy matching on 15 candidates)
+- **Suggestions**: One additional Qdrant query, <50ms
+- **LLM generation**: Ollama/Mistral on CPU dominates total latency at ~60-120s per query. GPU passthrough would bring this to ~2-5s.
 
 ## Configuration
 
