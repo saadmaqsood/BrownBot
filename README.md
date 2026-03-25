@@ -39,7 +39,7 @@ Streamlit UI
 
 > Running on an i5-7400, GTX 1060 3GB, and 8GB DDR3 — the LLM generation is slow on this machine, but it works.
 
-<video src="readme_assets/query_cc.mp4" controls width="800"></video>
+https://github.com/user-attachments/assets/7e8f1c31-ca43-40a2-8d00-28e1c04aea21
 
 ## Quick Start (Docker)
 
